@@ -15,7 +15,7 @@
 
 ### 安装
 ```bash
-go get github.com/yourusername/gormasynctask
+go get github.com/zhangzqs/gormasynctask
 ```
 
 ### 基础用法
