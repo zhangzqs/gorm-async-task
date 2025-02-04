@@ -158,6 +158,7 @@ func (s TaskScheduler[T]) DoOnce(ctx context.Context, input DoInput) (output DoO
 		close(pendingChan)
 	}()
 
+	output.Done, output.Error, output.ErrorDetail = []string{}, []string{}, []error{}
 	// 收集处理结果，把空任务过滤掉
 	for taskId := range doneChan {
 		output.Done = append(output.Done, taskId)

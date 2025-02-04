@@ -199,3 +199,7 @@ func (t *TaskTable[T]) GetStats(ctx context.Context) (map[TaskState]int64, error
 
 	return stats, nil
 }
+
+func (t *TaskTable[T]) GetGormDB() *gorm.DB {
+	return t.db
+}
