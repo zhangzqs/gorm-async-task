@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -18,6 +18,7 @@ type TestTaskEntity struct {
 	BaseTask
 	TaskID    string `gorm:"column:task_id;primaryKey"`
 	TestField string `gorm:"column:test_field"`
+	Count     int    `gorm:"column:count"`
 }
 
 func (*TestTaskEntity) TableName() string {
@@ -32,7 +33,7 @@ func (e *TestTaskEntity) GetTaskID() string {
 	return e.TaskID
 }
 
-func TestService(t *testing.T) {
+func TestNormalService(t *testing.T) {
 	dbDriver := sqlite.New(sqlite.Config{DSN: "test.db"})
 	defer func() {
 		_ = recover()
@@ -42,7 +43,7 @@ func TestService(t *testing.T) {
 	db, err := gorm.Open(dbDriver, &gorm.Config{
 		Logger: logger.Discard,
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	db.AutoMigrate(&TestTaskEntity{})
 
 	taskTable := NewTaskTable[*TestTaskEntity](db)
@@ -103,14 +104,129 @@ func TestService(t *testing.T) {
 	// 等待任务调度完毕
 	<-c
 
-	assert.Equal(t, 98, len(totalDone))
-	assert.Equal(t, 2, len(totalError))
-	assert.Len(t, totalDone, 98)
-	assert.Len(t, totalError, 2)
-	assert.Len(t, totalErrorDetail, 2)
+	require.Equal(t, 98, len(totalDone))
+	require.Equal(t, 2, len(totalError))
+	require.Len(t, totalDone, 98)
+	require.Len(t, totalError, 2)
+	require.Len(t, totalErrorDetail, 2)
 
-	assert.Contains(t, totalError, "task-1")
-	assert.Contains(t, totalError, "task-4")
-	assert.ErrorContains(t, errors.Join(totalErrorDetail...), "task error task-1")
-	assert.ErrorContains(t, errors.Join(totalErrorDetail...), "task error task-4")
+	require.Contains(t, totalError, "task-1")
+	require.Contains(t, totalError, "task-4")
+	require.ErrorContains(t, errors.Join(totalErrorDetail...), "task error task-1")
+	require.ErrorContains(t, errors.Join(totalErrorDetail...), "task error task-4")
+}
+
+func TestPending(t *testing.T) {
+	dbDriver := sqlite.New(sqlite.Config{DSN: "test.db"})
+	defer func() {
+		_ = recover()
+		os.Remove("test.db")
+	}()
+
+	db, err := gorm.Open(dbDriver, &gorm.Config{
+		Logger: logger.Discard,
+	})
+	require.NoError(t, err)
+	db.AutoMigrate(&TestTaskEntity{})
+
+	taskTable := NewTaskTable[*TestTaskEntity](db)
+	svr := NewTaskScheduler(
+		taskTable,
+		RunnerFunc[*TestTaskEntity](func(ctx context.Context, task *TestTaskEntity, handler Handler) {
+			// 任务执行逻辑
+			handler.DoneWithUpdater(map[string]any{"test_field": "testPendingTaskDone"})
+		}),
+	)
+	ctx := context.Background()
+
+	// 上来就直接创建一个定时任务
+	err = taskTable.Create(ctx, &TestTaskEntity{
+		BaseTask: BaseTask{
+			TaskState: TaskStatePending,
+			// 计划任务2s后执行
+			PendingUntil: time.Now().Add(time.Second * 2),
+		},
+		TaskID: "task-pending-1",
+	})
+	require.NoError(t, err)
+
+	go svr.Start(ctx, time.Millisecond*200, DoInput{
+		Limit:       10,
+		Concurrency: 10,
+	})
+
+	// 1s后任务执行不完，还处于pending
+	time.Sleep(time.Second * 1)
+	task, err := taskTable.GetTaskByID(ctx, "task-pending-1")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatePending, task.GetState())
+
+	// 3s后任务肯定执行完毕
+	time.Sleep(time.Second * 3)
+	task, err = taskTable.GetTaskByID(ctx, "task-pending-1")
+	require.NoError(t, err)
+	require.Equal(t, TaskStateDone, task.GetState())
+	require.Equal(t, "testPendingTaskDone", task.TestField)
+}
+
+func TestHandleResultPending(t *testing.T) {
+	dbDriver := sqlite.New(sqlite.Config{DSN: "test.db"})
+	defer func() {
+		_ = recover()
+		os.Remove("test.db")
+	}()
+
+	db, err := gorm.Open(dbDriver, &gorm.Config{
+		Logger: logger.Discard,
+	})
+	require.NoError(t, err)
+	db.AutoMigrate(&TestTaskEntity{})
+
+	taskTable := NewTaskTable[*TestTaskEntity](db)
+	svr := NewTaskScheduler(
+		taskTable,
+		RunnerFunc[*TestTaskEntity](func(ctx context.Context, task *TestTaskEntity, handler Handler) {
+			// 任务执行逻辑
+			if task.Count < 3 {
+				handler.PendingWithUpdater(map[string]any{"count": task.Count + 1}, time.Second)
+			} else {
+				handler.DoneWithUpdater(map[string]any{"test_field": "testPendingTaskDone"})
+			}
+		}),
+	)
+	ctx := context.Background()
+
+	// 上来就直接创建一个定时任务
+	err = taskTable.Create(ctx, &TestTaskEntity{
+		BaseTask: BaseTask{TaskState: TaskStateInit},
+		TaskID:   "task-pending-1",
+	})
+	require.NoError(t, err)
+
+	doOnce := func() { svr.DoOnce(ctx, DoInput{Limit: 1, Concurrency: 1}) }
+
+	assertStateAndCount := func(state TaskState, count int) {
+		task, err := taskTable.GetTaskByID(ctx, "task-pending-1")
+		require.NoError(t, err)
+		require.Equal(t, state, task.GetState())
+		require.Equal(t, count, task.Count)
+	}
+
+	assertStateAndCount(TaskStateInit, 0)
+	doOnce()
+	assertStateAndCount(TaskStatePending, 1)
+	doOnce()
+	assertStateAndCount(TaskStatePending, 1)
+	time.Sleep(time.Second)
+	doOnce()
+	assertStateAndCount(TaskStatePending, 2)
+
+	time.Sleep(time.Second)
+	doOnce()
+	assertStateAndCount(TaskStatePending, 3)
+
+	time.Sleep(time.Second)
+	doOnce()
+	assertStateAndCount(TaskStateDone, 3)
+
 }

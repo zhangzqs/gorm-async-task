@@ -139,7 +139,7 @@ func (t *TaskTable[T]) MarkTaskError(ctx context.Context, taskID string, err any
 // 获取任务记录
 func (t *TaskTable[T]) GetTaskByID(ctx context.Context, taskID string) (entity T, err error) {
 	err = t.db.WithContext(ctx).
-		Where(t.taskIDName+" = ? AND task_state = ?", taskID, TaskStateDone).
+		Where(t.taskIDName+" = ?", taskID).
 		First(&entity).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		err = ErrTaskNotFound
