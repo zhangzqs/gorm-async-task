@@ -104,6 +104,11 @@ func TestNormalService(t *testing.T) {
 	// 等待任务调度完毕
 	<-c
 
+	stats, err := taskTable.GetStats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(98), stats[TaskStateDone])
+	require.Equal(t, int64(2), stats[TaskStateError])
+
 	require.Equal(t, 98, len(totalDone))
 	require.Equal(t, 2, len(totalError))
 	require.Len(t, totalDone, 98)
