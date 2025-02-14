@@ -3,6 +3,7 @@ package gormasynctask
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -195,6 +196,8 @@ func (s TaskScheduler[T]) doOne(ctx context.Context, zombieTaskTimeout time.Dura
 	defer func() {
 		// panic的任务标记为error状态
 		if t := recover(); t != nil {
+			handler.state = TaskStateError
+			handler.err = errors.New(fmt.Sprint(t))
 			if err := s.table.MarkTaskError(ctx, taskID, t); err != nil {
 				logger.Error("mark task error", zap.Error(err))
 				return

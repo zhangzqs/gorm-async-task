@@ -104,6 +104,7 @@ func (t *TaskTable[T]) MarkTaskPending(ctx context.Context, taskID string, updat
 		updates = make(map[string]any)
 	}
 	updates["task_state"] = TaskStatePending
+	updates["error_message"] = ""
 	updates["updated_at"] = time.Now()
 	updates["pending_until"] = time.Now().Add(delay)
 
@@ -118,6 +119,7 @@ func (t *TaskTable[T]) MarkTaskDone(ctx context.Context, taskID string, updates 
 		updates = make(map[string]any)
 	}
 	updates["task_state"] = TaskStateDone
+	updates["error_message"] = ""
 	updates["updated_at"] = time.Now()
 
 	return t.db.WithContext(ctx).Model(new(T)).
